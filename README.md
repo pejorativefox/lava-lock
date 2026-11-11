@@ -4,6 +4,15 @@ An X11 screen locker with an animated lava-lamp or fire background, an Atom One
 Dark password field, and PAM authentication. Built on SDL3; the animation is
 rendered on the GPU and pauses while the monitors are powered off.
 
+![lava-lock with the lava animation](docs/lava.png)
+
+<details>
+<summary>Fire animation (<code>--fire</code>)</summary>
+
+![lava-lock with the fire animation](docs/fire.png)
+
+</details>
+
 ## Install
 
 Dependencies (Fedora names):
