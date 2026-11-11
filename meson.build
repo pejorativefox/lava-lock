@@ -11,6 +11,7 @@ cc = meson.get_compiler('c')
 
 sdl3_dep = dependency('sdl3', version: '>=3.2.0')
 x11_dep = dependency('x11')
+xext_dep = dependency('xext')
 pam_dep = dependency('pam')
 threads_dep = dependency('threads')
 m_dep = cc.find_library('m', required: false)
@@ -40,7 +41,7 @@ sources = files(
 )
 
 executable('lava-lock', sources,
-  dependencies: [sdl3_dep, x11_dep, pam_dep, threads_dep, m_dep],
+  dependencies: [sdl3_dep, x11_dep, xext_dep, pam_dep, threads_dep, m_dep],
   install: true,
 )
 

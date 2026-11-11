@@ -178,6 +178,9 @@ typedef struct {
   int w, h, n, t;
   float *px, *py, *r, *stretch, *tilt, *rise, *drift, *phase, *pulse;
   float *cos_t, *sin_t, *rax, *ray;
+  float *row;      /* per-row field accumulator, w floats */
+  float *bg_x;     /* per-column background term, w floats */
+  int *active;     /* blobs touching the current row, n ints */
   uint8_t *vis;
   uint64_t rng;
 } Plasma;
@@ -226,7 +229,11 @@ static bool plasma_init(Sim *sim, int w, int h, int blobs) {
   p->rax = calloc((size_t)n, sizeof(float));
   p->ray = calloc((size_t)n, sizeof(float));
   p->vis = calloc((size_t)w * (size_t)h, 1);
-  if (p->px == NULL || p->py == NULL || p->r == NULL || p->stretch == NULL ||
+  p->row = calloc((size_t)w, sizeof(float));
+  p->bg_x = calloc((size_t)w, sizeof(float));
+  p->active = calloc((size_t)n, sizeof(int));
+  if (p->row == NULL || p->bg_x == NULL || p->active == NULL ||
+      p->px == NULL || p->py == NULL || p->r == NULL || p->stretch == NULL ||
       p->tilt == NULL || p->rise == NULL || p->drift == NULL ||
       p->phase == NULL || p->pulse == NULL || p->cos_t == NULL ||
       p->sin_t == NULL || p->rax == NULL || p->ray == NULL ||
@@ -234,6 +241,7 @@ static bool plasma_init(Sim *sim, int w, int h, int blobs) {
     free(p->px); free(p->py); free(p->r); free(p->stretch); free(p->tilt);
     free(p->rise); free(p->drift); free(p->phase); free(p->pulse);
     free(p->cos_t); free(p->sin_t); free(p->rax); free(p->ray); free(p->vis);
+    free(p->row); free(p->bg_x); free(p->active);
     free(p);
     return false;
   }
@@ -248,6 +256,9 @@ static bool plasma_init(Sim *sim, int w, int h, int blobs) {
     p->drift[i] = rng_uniform(p, -0.12f, 0.12f);
     p->phase[i] = rng_uniform(p, 0.0f, 2.0f * (float)M_PI);
     p->pulse[i] = rng_uniform(p, 0.006f, 0.016f);
+    /* The tilt never changes, so its rotation is computed once. */
+    p->cos_t[i] = cosf(p->tilt[i]);
+    p->sin_t[i] = sinf(p->tilt[i]);
   }
   sim->state = p;
   return true;
@@ -292,44 +303,76 @@ static void plasma_tick(Sim *sim) {
                (1.0f + 0.14f * sinf((float)t * p->pulse[i] + p->phase[i]));
     p->rax[i] = 0.80f * rr / p->stretch[i];
     p->ray[i] = rr;
-    p->cos_t[i] = cosf(p->tilt[i]);
-    p->sin_t[i] = sinf(p->tilt[i]);
   }
 
+  /* The background term sin(a(x)) * sin(b(y)) is separable: one sinf per
+   * column and one per row instead of two per pixel. */
+  for (int x = 0; x < w; x++) {
+    p->bg_x[x] = sinf((float)x * 0.03f + (float)t * 0.005f);
+  }
+
+  /* A blob only contributes where q > 0, i.e. inside its ellipse, which lies
+   * within max(rax, ray) of its centre whatever the tilt.  Each blob is
+   * therefore only evaluated over its bounding box.  Contributions are still
+   * added per pixel in blob order, so the result matches the brute-force sum
+   * bit for bit. */
+  float *row = p->row;
   for (int y = 0; y < h; y++) {
     float fy = (float)y;
-    for (int x = 0; x < w; x++) {
-      float fx = (float)x;
-      float field = 0.0f;
+    int n_active = 0;
+    for (int i = 0; i < n; i++) {
+      float reach = fmaxf(p->rax[i], p->ray[i]) + 1.0f;
+      if (fabsf(fy - p->py[i]) < reach) {
+        p->active[n_active++] = i;
+      }
+    }
 
-      for (int i = 0; i < n; i++) {
-        float dx = fx - p->px[i];
-        float dy = fy - p->py[i];
-        float ux = dx * p->cos_t[i] + dy * p->sin_t[i];
-        float uy = -dx * p->sin_t[i] + dy * p->cos_t[i];
-        float qx = ux / p->rax[i];
-        float qy = uy / p->ray[i];
+    memset(row, 0, (size_t)w * sizeof(float));
+    for (int k = 0; k < n_active; k++) {
+      int i = p->active[k];
+      float reach = fmaxf(p->rax[i], p->ray[i]) + 1.0f;
+      int x0 = (int)floorf(p->px[i] - reach);
+      int x1 = (int)ceilf(p->px[i] + reach);
+      if (x0 < 0) {
+        x0 = 0;
+      }
+      if (x1 > w - 1) {
+        x1 = w - 1;
+      }
+      const float cx = p->px[i];
+      const float dy = fy - p->py[i];
+      const float c = p->cos_t[i];
+      const float sn = p->sin_t[i];
+      const float rax = p->rax[i];
+      const float ray = p->ray[i];
+      for (int x = x0; x <= x1; x++) {
+        float dx = (float)x - cx;
+        float ux = dx * c + dy * sn;
+        float uy = -dx * sn + dy * c;
+        float qx = ux / rax;
+        float qy = uy / ray;
         float q = 1.0f - qx * qx - qy * qy;
         if (q > 0.0f) {
           if (q > 1.0f) {
             q = 1.0f;
           }
-          field += q * q * q;
+          row[x] += q * q * q;
         }
       }
+    }
 
-      float bg = sinf(fx * 0.03f + (float)t * 0.005f) *
-                 sinf(fy * 0.04f - (float)t * 0.007f);
-      field += 0.05f * (0.5f + 0.5f * bg);
-
+    float bg_y = sinf(fy * 0.04f - (float)t * 0.007f);
+    uint8_t *out = p->vis + (size_t)y * (size_t)w;
+    for (int x = 0; x < w; x++) {
+      float bg = p->bg_x[x] * bg_y;
+      float field = row[x] + 0.05f * (0.5f + 0.5f * bg);
       float s = (field - 0.10f) / 0.55f;
       if (s < 0.0f) {
         s = 0.0f;
       } else if (s > 1.0f) {
         s = 1.0f;
       }
-      p->vis[(size_t)y * (size_t)w + (size_t)x] =
-          clamp_byte(255.0f * (s * s * (3.0f - 2.0f * s)));
+      out[x] = clamp_byte(255.0f * (s * s * (3.0f - 2.0f * s)));
     }
   }
 }
@@ -347,6 +390,7 @@ static void plasma_destroy(Sim *sim) {
     free(p->px); free(p->py); free(p->r); free(p->stretch); free(p->tilt);
     free(p->rise); free(p->drift); free(p->phase); free(p->pulse);
     free(p->cos_t); free(p->sin_t); free(p->rax); free(p->ray); free(p->vis);
+    free(p->row); free(p->bg_x); free(p->active);
     free(p);
   }
   sim->state = NULL;

@@ -20,10 +20,10 @@ equivalent protocol, so this port uses the same approach as i3lock/slock:
 Dependencies (Fedora names):
 
 ```sh
-sudo dnf install gcc meson ninja-build SDL3-devel libX11-devel pam-devel
+sudo dnf install gcc meson ninja-build SDL3-devel libX11-devel libXext-devel pam-devel
 ```
 
-`SDL3`, `libX11`, and `PAM` are found through `pkg-config`; there is no
+`SDL3`, `libX11`, `libXext` (DPMS), and `PAM` are found through `pkg-config`; there is no
 `SDL3_ttf`, SDL_image, Python, or font-file dependency.
 
 ```sh
@@ -70,6 +70,12 @@ Options:
 | `--font-scale N` | bitmap font scale (0 = automatic) |
 | `--fork` | detach after locking (lock mode only) |
 | `--verbose` | state changes on stderr |
+
+Rendering: the simulation runs at a low internal resolution (`--base`) and is
+uploaded as a small texture each frame; the GPU scales it to the screen, and the
+password field is a cached overlay redrawn only when its text changes.  SDL
+falls back to its software renderer if no GPU driver is available.  While DPMS
+has the monitors in standby/suspend/off, the animation stops entirely.
 
 Signals: `SIGUSR1` pauses the animation, `SIGUSR2` resumes it (the lock stays
 held), and `SIGINT`/`SIGTERM` unlock and exit.

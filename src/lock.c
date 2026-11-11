@@ -14,6 +14,7 @@
 #include <SDL3/SDL.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <X11/extensions/dpms.h>
 
 #include "field.h"
 #include "font.h"
@@ -24,6 +25,7 @@
 
 #define PASSWORD_MAX 4096
 #define FOCUS_INTERVAL_MS 1000
+#define IDLE_POLL_MS 250
 
 static const RGB RED = {0xE0, 0x6C, 0x75};
 static const RGB BLUE = {0x61, 0xAF, 0xEF};
@@ -52,12 +54,16 @@ typedef struct {
   bool locked;
 
   SDL_Window *window;
+  SDL_Renderer *gpu;
   Display *dpy;
   Window xwin;
   Cursor blank_cursor;
   bool keyboard_grabbed;
   bool pointer_grabbed;
   bool x11;
+  bool dpms;          /* the server supports DPMS */
+  bool display_off;   /* DPMS has powered the monitors down */
+  bool redraw;        /* the field or window needs repainting */
 
   SDL_Rect union_rect;
   SDL_Rect primary_rect;
@@ -312,6 +318,20 @@ static void reassert_lock(App *app) {
   XFlush(app->dpy);
 }
 
+/* True while DPMS has the monitors in standby/suspend/off.  Rendering then
+ * would only burn power for frames nobody can see. */
+static bool display_is_off(App *app) {
+  if (!app->dpms || app->dpy == NULL) {
+    return false;
+  }
+  CARD16 level = DPMSModeOn;
+  BOOL enabled = False;
+  if (!DPMSInfo(app->dpy, &level, &enabled) || !enabled) {
+    return false;
+  }
+  return level != DPMSModeOn;
+}
+
 /* ------------------------------------------------------------------------- */
 /* Display geometry                                                           */
 /* ------------------------------------------------------------------------- */
@@ -410,6 +430,21 @@ static void update_lock_geometry(App *app) {
 /* SDL window setup                                                           */
 /* ------------------------------------------------------------------------- */
 
+static bool create_gpu_renderer(App *app) {
+  /* Let SDL pick the best driver; it falls back to its software renderer when
+   * no GPU driver works, so locking never depends on GL being available. */
+  app->gpu = SDL_CreateRenderer(app->window, NULL);
+  if (app->gpu == NULL) {
+    fprintf(stderr, "lava-lock: SDL_CreateRenderer failed: %s\n",
+            SDL_GetError());
+    return false;
+  }
+  if (g_verbose) {
+    fprintf(stderr, "lava-lock: renderer %s\n", SDL_GetRendererName(app->gpu));
+  }
+  return true;
+}
+
 static bool setup_lock_window(App *app) {
   /* Force X11 even if SDL_VIDEODRIVER or a hint would otherwise pick Wayland:
    * the grabs and override-redirect window are X11-specific. */
@@ -457,22 +492,14 @@ static bool setup_lock_window(App *app) {
   SDL_SetWindowPosition(app->window, union_rect.x, union_rect.y);
   SDL_SetWindowSize(app->window, union_rect.w, union_rect.h);
 
-  /* SDL creates the real X window lazily when its surface is first requested.
-   * Force that now, while the window is still hidden and unmapped, so the XID
-   * we set override-redirect and grab on is the final one.  The window stays
+  /* Create the renderer while the window is still hidden and unmapped: a GL
+   * or Vulkan renderer may make SDL recreate the X window with a different
+   * visual, so the XID is only read afterwards, guaranteeing that the window we
+   * set override-redirect and grab on is the final one.  The window stays
    * unmapped until SDL_ShowWindow(), after the override-redirect bit is set, so
    * the window manager never sees a managed window. */
-  SDL_PropertiesID props = SDL_GetWindowProperties(app->window);
-  Display *early_dpy = SDL_GetPointerProperty(
-      props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
-  if (early_dpy == NULL) {
-    fprintf(stderr, "lava-lock: SDL did not create an X11 window\n");
-    return false;
-  }
   XSetErrorHandler(x11_error_handler);
-  if (SDL_GetWindowSurface(app->window) == NULL) {
-    fprintf(stderr, "lava-lock: SDL_GetWindowSurface failed: %s\n",
-            SDL_GetError());
+  if (!create_gpu_renderer(app)) {
     return false;
   }
   if (!get_window_x11(app)) {
@@ -491,6 +518,11 @@ static bool setup_lock_window(App *app) {
   XSetInputFocus(app->dpy, app->xwin, RevertToPointerRoot, CurrentTime);
   XSync(app->dpy, False);
 
+  int dpms_event = 0;
+  int dpms_error = 0;
+  app->dpms = DPMSQueryExtension(app->dpy, &dpms_event, &dpms_error) &&
+              DPMSCapable(app->dpy);
+
   app->blank_cursor = make_blank_cursor(app->dpy, app->xwin);
   if (!grab_input(app)) {
     return false;
@@ -503,8 +535,9 @@ static bool setup_lock_window(App *app) {
             SDL_GetError());
   }
 
-  if (!render_init(&app->renderer, app->sim, app->cfg->core, union_rect.w,
-                   union_rect.h, app->primary_rect, app->font_scale)) {
+  if (!render_init(&app->renderer, app->sim, app->cfg->core, app->gpu,
+                   union_rect.w, union_rect.h, app->primary_rect,
+                   app->font_scale)) {
     fprintf(stderr, "lava-lock: could not create the render surfaces: %s\n",
             SDL_GetError());
     return false;
@@ -528,6 +561,10 @@ static bool setup_preview_window(App *app) {
     return false;
   }
 
+  if (!create_gpu_renderer(app)) {
+    return false;
+  }
+
   int width = 0;
   int height = 0;
   SDL_GetWindowSizeInPixels(app->window, &width, &height);
@@ -539,8 +576,8 @@ static bool setup_preview_window(App *app) {
   app->primary_rect = (SDL_Rect){0, 0, width, height};
   app->font_scale =
       field_pick_font_scale(height, app->cfg->opt.font_scale);
-  if (!render_init(&app->renderer, app->sim, app->cfg->core, width, height,
-                   app->primary_rect, app->font_scale)) {
+  if (!render_init(&app->renderer, app->sim, app->cfg->core, app->gpu, width,
+                   height, app->primary_rect, app->font_scale)) {
     fprintf(stderr, "lava-lock: could not create the render surfaces: %s\n",
             SDL_GetError());
     return false;
@@ -631,6 +668,9 @@ static FieldContent make_content(App *app) {
 }
 
 static void handle_event(App *app, const SDL_Event *event) {
+  /* Anything below can change the field or the window contents; repainting is
+   * cheap, so do not track it finer than this. */
+  app->redraw = true;
   switch (event->type) {
     case SDL_EVENT_QUIT:
       if (app->is_preview) {
@@ -695,19 +735,18 @@ static void handle_event(App *app, const SDL_Event *event) {
   }
 }
 
-static void render_one_frame(App *app) {
+static void render_one_frame(App *app, bool advance) {
+  if (advance) {
+    sim_tick(app->sim);
+    if (!render_upload(&app->renderer) && g_verbose) {
+      fprintf(stderr, "lava-lock: upload failed: %s\n", SDL_GetError());
+    }
+  }
   FieldContent content = make_content(app);
-  if (!render_draw(&app->renderer, &content)) {
-    if (g_verbose) {
-      fprintf(stderr, "lava-lock: render failed: %s\n", SDL_GetError());
-    }
-    return;
+  if (!render_present(&app->renderer, &content) && g_verbose) {
+    fprintf(stderr, "lava-lock: present failed: %s\n", SDL_GetError());
   }
-  if (!render_present(&app->renderer, app->window)) {
-    if (g_verbose) {
-      fprintf(stderr, "lava-lock: present failed: %s\n", SDL_GetError());
-    }
-  }
+  app->redraw = false;
 }
 
 static void run_loop(App *app) {
@@ -738,8 +777,11 @@ static void run_loop(App *app) {
     }
 
     uint64_t now = SDL_GetTicks();
+    bool idle = app->paused || app->display_off;
     int timeout;
-    if (app->paused || app->authenticating) {
+    if (idle) {
+      timeout = IDLE_POLL_MS;
+    } else if (app->authenticating) {
       timeout = 100;
     } else {
       int64_t delta = (int64_t)app->next_frame_ms - (int64_t)now;
@@ -765,9 +807,25 @@ static void run_loop(App *app) {
     }
 
     now = SDL_GetTicks();
+    bool periodic = false;
     if (app->locked && now - app->last_focus_ms >= FOCUS_INTERVAL_MS) {
       reassert_lock(app);
       app->last_focus_ms = now;
+      periodic = true;
+    }
+    /* Polled every second while the monitors are on, and on every wake-up
+     * while they are off so the animation resumes as soon as they come back. */
+    if (app->dpms && (app->display_off || periodic)) {
+      bool off = display_is_off(app);
+      if (off != app->display_off) {
+        app->display_off = off;
+        if (g_verbose) {
+          fprintf(stderr, "lava-lock: display %s\n", off ? "off" : "on");
+        }
+        if (!off) {
+          app->next_frame_ms = now;
+        }
+      }
     }
 
     poll_auth(app);
@@ -780,13 +838,16 @@ static void run_loop(App *app) {
     }
 
     now = SDL_GetTicks();
-    if (!app->paused && now >= app->next_frame_ms) {
-      sim_tick(app->sim);
-      render_one_frame(app);
+    idle = app->paused || app->display_off;
+    if (!idle && now >= app->next_frame_ms) {
+      render_one_frame(app, true);
       app->next_frame_ms += (uint64_t)frame_ms;
       if (app->next_frame_ms <= now) {
         app->next_frame_ms = now + (uint64_t)frame_ms;
       }
+    } else if (app->paused && app->redraw) {
+      /* Keep the frozen frame and the field current (typing, expose). */
+      render_one_frame(app, false);
     }
   }
 }
@@ -805,6 +866,11 @@ static void app_cleanup(App *app) {
     release_input(app);
   }
   app->locked = false;
+  render_destroy(&app->renderer);
+  if (app->gpu != NULL) {
+    SDL_DestroyRenderer(app->gpu);
+    app->gpu = NULL;
+  }
   if (app->window != NULL) {
     SDL_DestroyWindow(app->window);
     app->window = NULL;
@@ -812,7 +878,6 @@ static void app_cleanup(App *app) {
   app->dpy = NULL;
   app->xwin = 0;
   app->x11 = false;
-  render_destroy(&app->renderer);
   SDL_Quit();
   pam_auth_destroy(&app->auth);
   password_clear(app);
@@ -889,6 +954,7 @@ int lava_run_lock(const Config *cfg) {
   for (int i = 0; i < cfg->ops->prewarm; i++) {
     sim_tick(app.sim);
   }
+  render_upload(&app.renderer);
 
   if (g_verbose) {
     fprintf(stderr,
@@ -930,6 +996,7 @@ int lava_run_preview(const Config *cfg) {
   for (int i = 0; i < cfg->ops->prewarm; i++) {
     sim_tick(app.sim);
   }
+  render_upload(&app.renderer);
 
   run_loop(&app);
   app_cleanup(&app);
@@ -964,7 +1031,7 @@ int lava_run_shot(const Config *cfg) {
   int font_scale = field_pick_font_scale(height, cfg->opt.font_scale);
 
   Renderer renderer;
-  if (!render_init(&renderer, sim, cfg->core, width, height, primary,
+  if (!render_init(&renderer, sim, cfg->core, NULL, width, height, primary,
                    font_scale)) {
     fprintf(stderr, "lava-lock: could not create the render surfaces: %s\n",
             SDL_GetError());
@@ -982,14 +1049,7 @@ int lava_run_shot(const Config *cfg) {
     .placeholder = "Enter password",
   };
 
-  if (!render_draw(&renderer, &content)) {
-    fprintf(stderr, "lava-lock: render failed: %s\n", SDL_GetError());
-    render_destroy(&renderer);
-    sim_destroy(sim);
-    SDL_Quit();
-    return 1;
-  }
-  if (!render_save_bmp(&renderer, cfg->opt.shot_path)) {
+  if (!render_save_bmp(&renderer, &content, cfg->opt.shot_path)) {
     fprintf(stderr, "lava-lock: cannot write %s: %s\n", cfg->opt.shot_path,
             SDL_GetError());
     render_destroy(&renderer);

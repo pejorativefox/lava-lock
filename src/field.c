@@ -14,31 +14,17 @@ static const RGB PLACEHOLDER = {0x61, 0xAF, 0xEF};
 
 #define FIELD_ALPHA 245
 
-static void put_pixel(SDL_Surface *dst, int x, int y, RGB color) {
+/* The field is drawn into a transparent ARGB8888 overlay that the caller
+ * composites over the animation (SDL_BLENDMODE_BLEND), so pixels are written,
+ * not blended: the translucent fill carries its alpha into the overlay. */
+static void put_pixel(SDL_Surface *dst, int x, int y, RGB color,
+                      uint8_t alpha) {
   if (x < 0 || y < 0 || x >= dst->w || y >= dst->h) {
     return;
   }
-  SDL_WriteSurfacePixel(dst, x, y, color.r, color.g, color.b, 255);
-}
-
-static void blend_pixel(SDL_Surface *dst, int x, int y, RGB color,
-                        uint8_t alpha) {
-  if (alpha == 255) {
-    put_pixel(dst, x, y, color);
-    return;
-  }
-  if (x < 0 || y < 0 || x >= dst->w || y >= dst->h) {
-    return;
-  }
-  uint8_t dr, dg, db, da;
-  if (!SDL_ReadSurfacePixel(dst, x, y, &dr, &dg, &db, &da)) {
-    return;
-  }
-  unsigned int inv = 255u - alpha;
-  dr = (uint8_t)(((unsigned int)color.r * alpha + (unsigned int)dr * inv) / 255u);
-  dg = (uint8_t)(((unsigned int)color.g * alpha + (unsigned int)dg * inv) / 255u);
-  db = (uint8_t)(((unsigned int)color.b * alpha + (unsigned int)db * inv) / 255u);
-  SDL_WriteSurfacePixel(dst, x, y, dr, dg, db, 255);
+  uint32_t *row = (uint32_t *)((uint8_t *)dst->pixels + (size_t)y * (size_t)dst->pitch);
+  row[x] = ((uint32_t)alpha << 24) | ((uint32_t)color.r << 16) |
+           ((uint32_t)color.g << 8) | (uint32_t)color.b;
 }
 
 static bool inside_round_rect(int px, int py, int x, int y, int w, int h,
@@ -63,7 +49,7 @@ static void fill_round_rect(SDL_Surface *dst, int x, int y, int w, int h,
   for (int py = y; py < y + h; py++) {
     for (int px = x; px < x + w; px++) {
       if (inside_round_rect(px, py, x, y, w, h, radius)) {
-        blend_pixel(dst, px, py, color, alpha);
+        put_pixel(dst, px, py, color, alpha);
       }
     }
   }
@@ -80,7 +66,7 @@ static void border_round_rect(SDL_Surface *dst, int x, int y, int w, int h,
       if (inside_round_rect(px, py, x + 1, y + 1, w - 2, h - 2, inner_r)) {
         continue;
       }
-      put_pixel(dst, px, py, color);
+      put_pixel(dst, px, py, color, 255);
     }
   }
 }
@@ -91,7 +77,7 @@ static void fill_circle(SDL_Surface *dst, int cx, int cy, int radius,
   for (int dy = -radius; dy <= radius; dy++) {
     for (int dx = -radius; dx <= radius; dx++) {
       if (dx * dx + dy * dy <= r2) {
-        put_pixel(dst, cx + dx, cy + dy, color);
+        put_pixel(dst, cx + dx, cy + dy, color, 255);
       }
     }
   }
@@ -113,9 +99,39 @@ int field_pick_font_scale(int viewport_height, int requested) {
                                requested);
 }
 
+static void grow(SDL_Rect *b, int x, int y, int w, int h) {
+  if (w <= 0 || h <= 0) {
+    return;
+  }
+  if (b->w <= 0 || b->h <= 0) {
+    *b = (SDL_Rect){x, y, w, h};
+    return;
+  }
+  int x1 = b->x + b->w > x + w ? b->x + b->w : x + w;
+  int y1 = b->y + b->h > y + h ? b->y + b->h : y + h;
+  b->x = b->x < x ? b->x : x;
+  b->y = b->y < y ? b->y : y;
+  b->w = x1 - b->x;
+  b->h = y1 - b->y;
+}
+
+static void draw_text(SDL_Surface *dst, SDL_Rect *bounds, int x, int y,
+                      const char *text, RGB color, int scale) {
+  size_t len = strlen(text);
+  grow(bounds, x, y, font_text_width(text, len, scale), font_text_height(scale));
+  if (dst != NULL) {
+    font_draw(dst, x, y, text, len, color, scale);
+  }
+}
+
 void field_render(SDL_Surface *dst, SDL_Rect viewport,
-                  const FieldContent *content, int font_scale) {
-  if (dst == NULL || content == NULL) {
+                  const FieldContent *content, int font_scale,
+                  SDL_Rect *bounds_out) {
+  SDL_Rect bounds = {0, 0, 0, 0};
+  if (bounds_out != NULL) {
+    *bounds_out = bounds;
+  }
+  if (content == NULL) {
     return;
   }
   const int vw = viewport.w;
@@ -156,8 +172,11 @@ void field_render(SDL_Surface *dst, SDL_Rect viewport,
   const int y0 = viewport.y + fy;
   const int fx = x0 + (sw - fw) / 2;
 
-  fill_round_rect(dst, fx, y0, fw, fh, radius, FIELD, FIELD_ALPHA);
-  border_round_rect(dst, fx, y0, fw, fh, radius, FIELD_BORDER);
+  grow(&bounds, fx, y0, fw, fh);
+  if (dst != NULL) {
+    fill_round_rect(dst, fx, y0, fw, fh, radius, FIELD, FIELD_ALPHA);
+    border_round_rect(dst, fx, y0, fw, fh, radius, FIELD_BORDER);
+  }
 
   const int text_x = fx + pad;
   size_t chars = util_utf8_count(content->password, content->password_len);
@@ -178,31 +197,37 @@ void field_render(SDL_Surface *dst, SDL_Rect viewport,
     }
     for (int i = 0; i < shown; i++) {
       int cx = text_x + spacing / 2 + i * spacing;
-      fill_circle(dst, cx, dot_y, dot_r, CORE);
+      grow(&bounds, cx - dot_r, dot_y - dot_r, 2 * dot_r + 1, 2 * dot_r + 1);
+      if (dst != NULL) {
+        fill_circle(dst, cx, dot_y, dot_r, CORE);
+      }
     }
     if (chars > (size_t)max_dots) {
       char extra[32];
       snprintf(extra, sizeof(extra), "+%d", (int)(chars - (size_t)max_dots));
-      font_draw(dst, text_x + shown * spacing, dot_y - font_h / 2, extra,
-                strlen(extra), MUTED, font_scale);
+      draw_text(dst, &bounds, text_x + shown * spacing, dot_y - font_h / 2,
+                extra, MUTED, font_scale);
     }
   } else {
     const char *placeholder = content->placeholder;
     if (placeholder == NULL || placeholder[0] == '\0') {
       placeholder = "Password";
     }
-    font_draw(dst, text_x, y0 + (fh - font_h) / 2, placeholder,
-              strlen(placeholder), PLACEHOLDER, font_scale);
+    draw_text(dst, &bounds, text_x, y0 + (fh - font_h) / 2, placeholder,
+              PLACEHOLDER, font_scale);
   }
 
   int ty = y0 + fh + 12;
   if (has_msg) {
-    font_draw(dst, x0 + (sw - msg_w) / 2, ty, content->message,
-              strlen(content->message), content->message_color, font_scale);
+    draw_text(dst, &bounds, x0 + (sw - msg_w) / 2, ty, content->message,
+              content->message_color, font_scale);
     ty += font_h + 4;
   }
   if (has_cap) {
-    font_draw(dst, x0 + (sw - cap_w) / 2, ty, content->username,
-              strlen(content->username), MUTED, font_scale);
+    draw_text(dst, &bounds, x0 + (sw - cap_w) / 2, ty, content->username,
+              MUTED, font_scale);
+  }
+  if (bounds_out != NULL) {
+    *bounds_out = bounds;
   }
 }
