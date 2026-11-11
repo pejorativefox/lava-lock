@@ -42,7 +42,8 @@ keeps doing the locking and draws its own unlock dialog over the animation.
 xfce4-screensaver only runs theme programs from its own directory, so this
 installs a `lava-lock` symlink in `/usr/libexec/xfce4-screensaver` (change it
 with `-Dxfce4_screensaver_dir=...`, or skip the themes with
-`-Dxfce4_screensaver=false`).
+`-Dxfce4_screensaver=false`). A user-prefix install (e.g. `--prefix ~/.local`)
+cannot write there; it prints the one `sudo ln -sfn ...` command to run.
 
 The embedded bitmap font is derived from Terminus Font, licensed under the SIL
 Open Font License 1.1 (`third_party/terminus-OFL.txt`).

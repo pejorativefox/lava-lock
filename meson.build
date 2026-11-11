@@ -56,10 +56,10 @@ if get_option('xfce4_screensaver')
   # directories, so a symlink to the binary is installed there and the theme
   # files run that.
   saver_dir = get_option('xfce4_screensaver_dir')
-  install_symlink('lava-lock',
-    install_dir: saver_dir,
-    pointing_to: get_option('prefix') / get_option('bindir') / 'lava-lock',
-  )
+  # Not install_symlink(): that silently skips the link (and every other
+  # symlink) when the directory is not writable, e.g. for a ~/.local prefix.
+  meson.add_install_script('data/install-saver-link.sh', saver_dir,
+    get_option('prefix') / get_option('bindir') / 'lava-lock')
   saver_conf = configuration_data()
   saver_conf.set('saverdir', saver_dir)
   foreach kind : ['lava', 'fire']
