@@ -264,7 +264,7 @@ void options_usage(FILE *out) {
   fprintf(out,
     "Usage: lava-lock [options]\n"
     "\n"
-    "An X11 screen locker with the lava-lamp / fire animation from anim.py.\n"
+    "An X11 screen locker with a lava-lamp or fire animation.\n"
     "\n"
     "Modes:\n"
     "  (default)              lock the running X session\n"

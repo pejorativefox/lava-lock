@@ -22,7 +22,7 @@ static uint8_t clamp_byte(float value) {
 }
 
 /* Linear interpolation over (position, colour) stops.  The last stop's colour
- * is replaced by `core`, matching the Python _ramp() helper. */
+ * is replaced by `core`. */
 static void interp_stops(const Stop *stops, int n, RGB core, int count,
                          uint8_t out[][3]) {
   for (int i = 0; i < count; i++) {
@@ -48,7 +48,7 @@ static void interp_stops(const Stop *stops, int n, RGB core, int count,
 }
 
 /* ------------------------------------------------------------------------- */
-/* Fire: Jare's demoscene fire, ported from animlib/sims.py.                  */
+/* Fire: Jare's demoscene fire.                                               */
 /* ------------------------------------------------------------------------- */
 
 typedef struct {
@@ -171,7 +171,7 @@ static const SimOps fire_ops = {
 };
 
 /* ------------------------------------------------------------------------- */
-/* Plasma: the metaball lava lamp, ported from animlib/sims.py.               */
+/* Plasma: the metaball lava lamp.                                            */
 /* ------------------------------------------------------------------------- */
 
 typedef struct {

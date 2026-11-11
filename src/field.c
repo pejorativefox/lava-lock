@@ -5,7 +5,7 @@
 
 #include "font.h"
 
-/* Atom One Dark accents, copied from animlib/field.py. */
+/* Atom One Dark accents. */
 static const RGB CORE = {0xB6, 0xD6, 0xF2};
 static const RGB MUTED = {0x98, 0xA1, 0xB0};
 static const RGB FIELD = {0x21, 0x25, 0x2B};      /* alpha 245 below */

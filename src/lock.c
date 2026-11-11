@@ -184,8 +184,7 @@ static void set_message(App *app, const char *text, RGB color) {
 }
 
 /* SDL text input is UTF-8.  Reject control characters so a stray XIM event
- * cannot inject newlines/tabs into the password (the Wayland locker filtered
- * these with char.isprintable()). */
+ * cannot inject newlines/tabs into the password. */
 static bool text_is_printable(const char *text) {
   if (text == NULL) {
     return false;
@@ -446,7 +445,7 @@ static bool create_gpu_renderer(App *app) {
 }
 
 static bool setup_lock_window(App *app) {
-  /* Force X11 even if SDL_VIDEODRIVER or a hint would otherwise pick Wayland:
+  /* Force X11 even if SDL_VIDEODRIVER or a hint would pick another driver:
    * the grabs and override-redirect window are X11-specific. */
   SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "x11", SDL_HINT_OVERRIDE);
   if (!SDL_Init(SDL_INIT_VIDEO)) {
