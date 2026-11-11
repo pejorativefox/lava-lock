@@ -1,0 +1,8 @@
+/build/
+/build-*/
+/builddir/
+*.bmp
+*.o
+*.so
+*.a
+compile_commands.json
