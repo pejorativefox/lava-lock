@@ -319,8 +319,9 @@ static void reassert_lock(App *app) {
   XFlush(app->dpy);
 }
 
-/* True while DPMS has the monitors in standby/suspend/off.  Rendering then
- * would only burn power for frames nobody can see. */
+/* True only while DPMS has the monitors fully off.  Standby and suspend are
+ * deliberately treated as "on": on many panels they leave the screen visible,
+ * and pausing the animation there would look like a frozen frame. */
 static bool display_is_off(App *app) {
   if (!app->dpms || app->dpy == NULL) {
     return false;
@@ -330,7 +331,7 @@ static bool display_is_off(App *app) {
   if (!DPMSInfo(app->dpy, &level, &enabled) || !enabled) {
     return false;
   }
-  return level != DPMSModeOn;
+  return level == DPMSModeOff;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -431,6 +432,24 @@ static void update_lock_geometry(App *app) {
 /* SDL window setup                                                           */
 /* ------------------------------------------------------------------------- */
 
+/* SDL disables the X11 screensaver (and its DPMS timer) by default, as if it
+ * were a game.  A locker or screensaver theme must do the opposite: the
+ * display has to be allowed to blank and power off while it runs.  The hint
+ * must be set before SDL_Init so the server's idle countdown is not reset. */
+static void request_display_sleep_allowed(void) {
+  SDL_SetHintWithPriority(SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "1",
+                          SDL_HINT_OVERRIDE);
+}
+
+/* Fallback for a video backend that ignored the hint.  A no-op when the hint
+ * was applied, because SDL then never suspended the screensaver. */
+static void allow_display_sleep(void) {
+  if (!SDL_EnableScreenSaver() && g_verbose) {
+    fprintf(stderr, "lava-lock: could not re-enable display blanking: %s\n",
+            SDL_GetError());
+  }
+}
+
 static bool create_gpu_renderer(App *app) {
   /* Let SDL pick the best driver; it falls back to its software renderer when
    * no GPU driver works, so locking never depends on GL being available. */
@@ -450,10 +469,12 @@ static bool setup_lock_window(App *app) {
   /* Force X11 even if SDL_VIDEODRIVER or a hint would pick another driver:
    * the grabs and override-redirect window are X11-specific. */
   SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "x11", SDL_HINT_OVERRIDE);
+  request_display_sleep_allowed();
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     fprintf(stderr, "lava-lock: SDL_Init failed: %s\n", SDL_GetError());
     return false;
   }
+  allow_display_sleep();
 
   const char *driver = SDL_GetCurrentVideoDriver();
   if (driver == NULL || strcmp(driver, "x11") != 0) {
@@ -612,10 +633,12 @@ static void preview_resize(App *app) {
 
 static bool setup_saver_window(App *app, unsigned long xid) {
   SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "x11", SDL_HINT_OVERRIDE);
+  request_display_sleep_allowed();
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     fprintf(stderr, "lava-lock: SDL_Init failed: %s\n", SDL_GetError());
     return false;
   }
+  allow_display_sleep();
 
   /* Wrap the window the screensaver created.  It owns the window: we only
    * draw into it, and it is gone once the screensaver stops us. */

@@ -38,6 +38,8 @@ Then lock with `lava-lock` (or `lava-lock --fire`), or hook it up to
 `meson install` also adds two screensaver themes, **Lava Lamp (lava-lock)** and
 **Fire (lava-lock)**. Pick one in *Screensaver Preferences*; xfce4-screensaver
 keeps doing the locking and draws its own unlock dialog over the animation.
+The theme leaves display power management alone, so the monitor blanks and
+powers off on the configured schedule.
 
 xfce4-screensaver only runs theme programs from its own directory, so this
 installs a `lava-lock` symlink in `/usr/libexec/xfce4-screensaver` (change it
