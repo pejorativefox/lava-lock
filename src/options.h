@@ -15,6 +15,7 @@ typedef enum {
   MODE_LOCK,
   MODE_PREVIEW,
   MODE_SHOT,
+  MODE_SAVER,
 } Mode;
 
 typedef struct {
@@ -38,6 +39,7 @@ typedef struct {
 
   int preview_w, preview_h;
   const char *shot_path;
+  unsigned long window_id; /* --saver target; 0 = $XSCREENSAVER_WINDOW */
   int frames;
   int font_scale;
 

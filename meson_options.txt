@@ -1,0 +1,5 @@
+option('xfce4_screensaver', type: 'boolean', value: true,
+  description: 'Install lava and fire themes for xfce4-screensaver')
+option('xfce4_screensaver_dir', type: 'string',
+  value: '/usr/libexec/xfce4-screensaver',
+  description: 'xfce4-screensaver engine directory; it only runs themes whose program is in a fixed set of directories, so this is not under the prefix')

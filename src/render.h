@@ -64,7 +64,8 @@ void render_set_font_scale(Renderer *r, int font_scale);
 bool render_upload(Renderer *r);
 
 /* GPU backend: draw the last uploaded animation and the field, then present.
- * Cheap enough to call again (e.g. on expose) without a new upload. */
+ * Cheap enough to call again (e.g. on expose) without a new upload.
+ * `content` may be NULL to draw the animation alone. */
 bool render_present(Renderer *r, const FieldContent *content);
 
 /* Software backend: compose the frame and write it as a BMP. */

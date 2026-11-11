@@ -1,7 +1,9 @@
 #include "util.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -89,4 +91,27 @@ double util_now(void) {
     return 0.0;
   }
   return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+bool util_parse_window_id(const char *text, unsigned long *out) {
+  if (text == NULL) {
+    return false;
+  }
+  while (*text == ' ' || *text == '\t') {
+    text++;
+  }
+  if (*text == '\0' || *text == '-') {
+    return false;
+  }
+  errno = 0;
+  char *end = NULL;
+  unsigned long value = strtoul(text, &end, 0);
+  while (end != NULL && (*end == ' ' || *end == '\t' || *end == '\n')) {
+    end++;
+  }
+  if (errno != 0 || end == text || end == NULL || *end != '\0' || value == 0) {
+    return false;
+  }
+  *out = value;
+  return true;
 }

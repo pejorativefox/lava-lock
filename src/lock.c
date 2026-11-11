@@ -51,6 +51,8 @@ typedef struct {
   bool running;
   bool paused;
   bool is_preview;
+  bool is_saver;      /* drawing into a screensaver's window: animation only */
+  bool auth_ready;
   bool locked;
 
   SDL_Window *window;
@@ -608,6 +610,58 @@ static void preview_resize(App *app) {
   app->next_frame_ms = SDL_GetTicks();
 }
 
+static bool setup_saver_window(App *app, unsigned long xid) {
+  SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "x11", SDL_HINT_OVERRIDE);
+  if (!SDL_Init(SDL_INIT_VIDEO)) {
+    fprintf(stderr, "lava-lock: SDL_Init failed: %s\n", SDL_GetError());
+    return false;
+  }
+
+  /* Wrap the window the screensaver created.  It owns the window: we only
+   * draw into it, and it is gone once the screensaver stops us. */
+  SDL_PropertiesID props = SDL_CreateProperties();
+  SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X11_WINDOW_NUMBER,
+                        (Sint64)xid);
+  app->window = SDL_CreateWindowWithProperties(props);
+  SDL_DestroyProperties(props);
+  if (app->window == NULL) {
+    fprintf(stderr, "lava-lock: cannot use window 0x%lx: %s\n", xid,
+            SDL_GetError());
+    return false;
+  }
+  if (!create_gpu_renderer(app)) {
+    return false;
+  }
+  if (get_window_x11(app)) {
+    XSetErrorHandler(x11_error_handler);
+    int dpms_event = 0;
+    int dpms_error = 0;
+    app->dpms = DPMSQueryExtension(app->dpy, &dpms_event, &dpms_error) &&
+                DPMSCapable(app->dpy);
+  }
+
+  int width = 0;
+  int height = 0;
+  SDL_GetWindowSizeInPixels(app->window, &width, &height);
+  if (width <= 0 || height <= 0) {
+    fprintf(stderr, "lava-lock: window 0x%lx has no usable size\n", xid);
+    return false;
+  }
+  app->primary_rect = (SDL_Rect){0, 0, width, height};
+  app->font_scale = field_pick_font_scale(height, app->cfg->opt.font_scale);
+  if (!render_init(&app->renderer, app->sim, app->cfg->core, app->gpu, width,
+                   height, app->primary_rect, app->font_scale)) {
+    fprintf(stderr, "lava-lock: could not create the render surfaces: %s\n",
+            SDL_GetError());
+    return false;
+  }
+  if (g_verbose) {
+    fprintf(stderr, "lava-lock: saver in window 0x%lx (%dx%d)\n", xid, width,
+            height);
+  }
+  return true;
+}
+
 /* ------------------------------------------------------------------------- */
 /* Authentication                                                             */
 /* ------------------------------------------------------------------------- */
@@ -670,6 +724,26 @@ static void handle_event(App *app, const SDL_Event *event) {
   /* Anything below can change the field or the window contents; repainting is
    * cheap, so do not track it finer than this. */
   app->redraw = true;
+  if (app->is_saver) {
+    /* The screensaver owns input; only follow the window. */
+    switch (event->type) {
+      case SDL_EVENT_QUIT:
+      case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+      case SDL_EVENT_WINDOW_DESTROYED:
+        app->running = false;
+        break;
+      case SDL_EVENT_WINDOW_EXPOSED:
+        app->next_frame_ms = SDL_GetTicks();
+        break;
+      case SDL_EVENT_WINDOW_RESIZED:
+      case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+        preview_resize(app);
+        break;
+      default:
+        break;
+    }
+    return;
+  }
   switch (event->type) {
     case SDL_EVENT_QUIT:
       if (app->is_preview) {
@@ -742,7 +816,8 @@ static void render_one_frame(App *app, bool advance) {
     }
   }
   FieldContent content = make_content(app);
-  if (!render_present(&app->renderer, &content) && g_verbose) {
+  if (!render_present(&app->renderer, app->is_saver ? NULL : &content) &&
+      g_verbose) {
     fprintf(stderr, "lava-lock: present failed: %s\n", SDL_GetError());
   }
   app->redraw = false;
@@ -792,8 +867,8 @@ static void run_loop(App *app) {
       }
       timeout = (int)delta;
     }
-    if (app->locked && now - app->last_focus_ms >= FOCUS_INTERVAL_MS &&
-        timeout > 200) {
+    if ((app->locked || app->dpms) &&
+        now - app->last_focus_ms >= FOCUS_INTERVAL_MS && timeout > 200) {
       timeout = 200;
     }
 
@@ -807,8 +882,10 @@ static void run_loop(App *app) {
 
     now = SDL_GetTicks();
     bool periodic = false;
-    if (app->locked && now - app->last_focus_ms >= FOCUS_INTERVAL_MS) {
-      reassert_lock(app);
+    if (now - app->last_focus_ms >= FOCUS_INTERVAL_MS) {
+      if (app->locked) {
+        reassert_lock(app);
+      }
       app->last_focus_ms = now;
       periodic = true;
     }
@@ -878,7 +955,10 @@ static void app_cleanup(App *app) {
   app->xwin = 0;
   app->x11 = false;
   SDL_Quit();
-  pam_auth_destroy(&app->auth);
+  if (app->auth_ready) {
+    pam_auth_destroy(&app->auth);
+    app->auth_ready = false;
+  }
   password_clear(app);
   free(app->password);
   app->password = NULL;
@@ -943,6 +1023,7 @@ int lava_run_lock(const Config *cfg) {
     return 1;
   }
   pam_auth_init(&app.auth, cfg->username, cfg->opt.pam_service);
+  app.auth_ready = true;
   install_signals();
 
   if (!setup_lock_window(&app)) {
@@ -985,9 +1066,50 @@ int lava_run_preview(const Config *cfg) {
     return 1;
   }
   pam_auth_init(&app.auth, cfg->username, cfg->opt.pam_service);
+  app.auth_ready = true;
   install_signals();
 
   if (!setup_preview_window(&app)) {
+    app_cleanup(&app);
+    return 1;
+  }
+
+  for (int i = 0; i < cfg->ops->prewarm; i++) {
+    sim_tick(app.sim);
+  }
+  render_upload(&app.renderer);
+
+  run_loop(&app);
+  app_cleanup(&app);
+  return 0;
+}
+
+int lava_run_saver(const Config *cfg) {
+  App app;
+  memset(&app, 0, sizeof(app));
+  app.cfg = cfg;
+  app.lock_fd = -1;
+  app.running = true;
+  app.is_saver = true;
+  g_verbose = cfg->opt.verbose;
+
+  unsigned long xid = cfg->opt.window_id;
+  if (xid == 0 &&
+      !util_parse_window_id(getenv("XSCREENSAVER_WINDOW"), &xid)) {
+    fprintf(stderr,
+            "lava-lock: --saver needs $XSCREENSAVER_WINDOW or --window-id\n");
+    return 2;
+  }
+
+  app.sim = sim_create(cfg->ops, cfg->base_w, cfg->base_h, cfg->opt.blobs);
+  if (app.sim == NULL) {
+    fprintf(stderr, "lava-lock: could not create the %s simulation\n",
+            cfg->ops->name);
+    return 1;
+  }
+  install_signals();
+
+  if (!setup_saver_window(&app, xid)) {
     app_cleanup(&app);
     return 1;
   }

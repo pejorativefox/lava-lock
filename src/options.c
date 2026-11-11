@@ -24,6 +24,8 @@ enum {
   OPT_SHOT,
   OPT_FRAMES,
   OPT_FONT_SCALE,
+  OPT_SAVER,
+  OPT_WINDOW_ID,
   OPT_HELP,
   OPT_VERSION,
 };
@@ -88,6 +90,8 @@ const char *options_parse(Options *opt, int argc, char **argv) {
   bool shot_seen = false;
   bool window_seen = false;
   bool frames_seen = false;
+  bool saver_seen = false;
+  bool window_id_seen = false;
 
   static const struct option long_options[] = {
     {"lava", no_argument, NULL, OPT_LAVA},
@@ -107,6 +111,8 @@ const char *options_parse(Options *opt, int argc, char **argv) {
     {"shot", required_argument, NULL, OPT_SHOT},
     {"frames", required_argument, NULL, OPT_FRAMES},
     {"font-scale", required_argument, NULL, OPT_FONT_SCALE},
+    {"saver", no_argument, NULL, OPT_SAVER},
+    {"window-id", required_argument, NULL, OPT_WINDOW_ID},
     {"help", no_argument, NULL, OPT_HELP},
     {"version", no_argument, NULL, OPT_VERSION},
     {NULL, 0, NULL, 0},
@@ -186,8 +192,8 @@ const char *options_parse(Options *opt, int argc, char **argv) {
         opt->fork = true;
         break;
       case OPT_PREVIEW:
-        if (shot_seen) {
-          return set_error("--preview and --shot are mutually exclusive");
+        if (shot_seen || saver_seen) {
+          return set_error("--preview, --shot and --saver are mutually exclusive");
         }
         opt->mode = MODE_PREVIEW;
         preview_seen = true;
@@ -201,8 +207,8 @@ const char *options_parse(Options *opt, int argc, char **argv) {
         window_seen = true;
         break;
       case OPT_SHOT:
-        if (preview_seen) {
-          return set_error("--preview and --shot are mutually exclusive");
+        if (preview_seen || saver_seen) {
+          return set_error("--preview, --shot and --saver are mutually exclusive");
         }
         opt->mode = MODE_SHOT;
         opt->shot_path = optarg;
@@ -218,6 +224,19 @@ const char *options_parse(Options *opt, int argc, char **argv) {
         if (!parse_int(optarg, 0, 8, &opt->font_scale)) {
           return set_error("--font-scale must be between 0 (auto) and 8");
         }
+        break;
+      case OPT_SAVER:
+        if (preview_seen || shot_seen) {
+          return set_error("--preview, --shot and --saver are mutually exclusive");
+        }
+        opt->mode = MODE_SAVER;
+        saver_seen = true;
+        break;
+      case OPT_WINDOW_ID:
+        if (!util_parse_window_id(optarg, &opt->window_id)) {
+          return set_error("--window-id must be a non-zero X window id");
+        }
+        window_id_seen = true;
         break;
       case OPT_HELP:
       case 'h':
@@ -244,8 +263,11 @@ const char *options_parse(Options *opt, int argc, char **argv) {
   if (opt->fork && opt->mode != MODE_LOCK) {
     return set_error("--fork is only valid in lock mode");
   }
-  if (window_seen && opt->mode == MODE_LOCK) {
+  if (window_seen && (opt->mode == MODE_LOCK || opt->mode == MODE_SAVER)) {
     return set_error("--window is only valid with --preview or --shot");
+  }
+  if (window_id_seen && opt->mode != MODE_SAVER) {
+    return set_error("--window-id is only valid with --saver");
   }
   if (frames_seen && opt->mode != MODE_SHOT) {
     return set_error("--frames is only valid with --shot");
@@ -270,6 +292,9 @@ void options_usage(FILE *out) {
     "  (default)              lock the running X session\n"
     "  --preview              run in a window; no grabs, cursor visible\n"
     "  --shot FILE            render one frame to FILE (BMP) and exit\n"
+    "  --saver                screensaver theme: animate the window in\n"
+    "                         $XSCREENSAVER_WINDOW (or --window-id); no\n"
+    "                         password field, grabs or authentication\n"
     "\n"
     "Animation:\n"
     "  --lava                 lava lamp (default)\n"
@@ -288,6 +313,7 @@ void options_usage(FILE *out) {
     "Display:\n"
     "  --window WxH           preview/shot size (default 1280x720)\n"
     "  --frames N             simulation ticks before --shot (default 90)\n"
+    "  --window-id XID        window to draw into with --saver\n"
     "  --font-scale N         bitmap font scale (0 = automatic, default 0)\n"
     "  --fork                 detach after locking (lock mode only)\n"
     "  --verbose              log state changes to stderr\n"
@@ -299,6 +325,7 @@ void options_usage(FILE *out) {
     "  lava-lock --fire --fork\n"
     "  lava-lock --preview --lava --no-auth\n"
     "  lava-lock --shot /tmp/lava.bmp --frames 120\n"
+    "  XSCREENSAVER_WINDOW=0x2a00007 lava-lock --saver --fire\n"
     "\n"
     "Security: X11 has no session-lock protocol.  This program covers every\n"
     "output with an override-redirect window and grabs the keyboard and\n"

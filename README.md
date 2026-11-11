@@ -33,5 +33,16 @@ Then lock with `lava-lock` (or `lava-lock --fire`), or hook it up to
 `xss-lock -- lava-lock --fork`. Try it without locking using
 `lava-lock --preview --no-auth`, and see `lava-lock --help` for all options.
 
+### xfce4-screensaver
+
+`meson install` also adds two screensaver themes, **Lava Lamp (lava-lock)** and
+**Fire (lava-lock)**. Pick one in *Screensaver Preferences*; xfce4-screensaver
+keeps doing the locking and draws its own unlock dialog over the animation.
+
+xfce4-screensaver only runs theme programs from its own directory, so this
+installs a `lava-lock` symlink in `/usr/libexec/xfce4-screensaver` (change it
+with `-Dxfce4_screensaver_dir=...`, or skip the themes with
+`-Dxfce4_screensaver=false`).
+
 The embedded bitmap font is derived from Terminus Font, licensed under the SIL
 Open Font License 1.1 (`third_party/terminus-OFL.txt`).

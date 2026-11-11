@@ -26,6 +26,9 @@ size_t util_utf8_count(const char *text, size_t len);
  * offset, normally the end of the string). */
 size_t util_utf8_prev(const char *text, size_t len, size_t pos);
 
+/* "0x2a00007" or "44040199" -> X window id.  Returns false on 0 or garbage. */
+bool util_parse_window_id(const char *text, unsigned long *out);
+
 /* Monotonic seconds, for --unlock-after and logging. */
 double util_now(void);
 

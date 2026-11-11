@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Lava Lamp (lava-lock)
+Comment=Metaball lava lamp in Atom One Dark colours
+Exec=@saverdir@/lava-lock --saver --lava
+TryExec=@saverdir@/lava-lock
+StartupNotify=false
+Terminal=false
+Type=Application
+Categories=Screensaver;
+OnlyShowIn=XFCE;
+Hidden=true

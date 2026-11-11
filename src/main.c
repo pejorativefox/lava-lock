@@ -96,6 +96,8 @@ int main(int argc, char **argv) {
       return lava_run_preview(&cfg);
     case MODE_SHOT:
       return lava_run_shot(&cfg);
+    case MODE_SAVER:
+      return lava_run_saver(&cfg);
     case MODE_LOCK:
     default:
       return lava_run_lock(&cfg);

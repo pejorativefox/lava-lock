@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Fire (lava-lock)
+Comment=Demoscene fire in Atom One Dark blues
+Exec=@saverdir@/lava-lock --saver --fire
+TryExec=@saverdir@/lava-lock
+StartupNotify=false
+Terminal=false
+Type=Application
+Categories=Screensaver;
+OnlyShowIn=XFCE;
+Hidden=true

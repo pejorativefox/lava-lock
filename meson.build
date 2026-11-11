@@ -50,3 +50,25 @@ test('smoke', smoke,
   args: [meson.current_build_dir() / 'lava-lock'],
   timeout: 120,
 )
+
+if get_option('xfce4_screensaver')
+  # xfce4-screensaver refuses theme commands outside its own engine
+  # directories, so a symlink to the binary is installed there and the theme
+  # files run that.
+  saver_dir = get_option('xfce4_screensaver_dir')
+  install_symlink('lava-lock',
+    install_dir: saver_dir,
+    pointing_to: get_option('prefix') / get_option('bindir') / 'lava-lock',
+  )
+  saver_conf = configuration_data()
+  saver_conf.set('saverdir', saver_dir)
+  foreach kind : ['lava', 'fire']
+    configure_file(
+      input: 'data/lava-lock-@0@.desktop.in'.format(kind),
+      output: 'lava-lock-@0@.desktop'.format(kind),
+      configuration: saver_conf,
+      install: true,
+      install_dir: get_option('datadir') / 'applications' / 'screensavers',
+    )
+  endforeach
+endif

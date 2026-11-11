@@ -194,10 +194,17 @@ static bool update_field(Renderer *r, const FieldContent *content) {
 }
 
 bool render_present(Renderer *r, const FieldContent *content) {
-  if (r->gpu == NULL || r->anim_tex == NULL || content == NULL) {
+  if (r->gpu == NULL || r->anim_tex == NULL) {
     return false;
   }
-  bool ok = update_field(r, content);
+  bool ok = true;
+  if (content != NULL) {
+    ok = update_field(r, content);
+  } else if (r->field_tex != NULL) {
+    SDL_DestroyTexture(r->field_tex);
+    r->field_tex = NULL;
+    r->field_valid = false;
+  }
   /* No clear: the animation covers the whole output every frame. */
   ok = SDL_RenderTexture(r->gpu, r->anim_tex, NULL, NULL) && ok;
   if (r->field_tex != NULL) {
